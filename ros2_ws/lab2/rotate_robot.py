@@ -41,10 +41,13 @@ class rotate_node(Node):
     def send_cmd(self):
         cmd = Twist()
         # if ((self.msg.x-160) != 0) & ((self.msg.y-120) != 0):
-        if (self.coordinates_x == 0) & (self.coordinates_y == 0):
-            cmd.linear.x = 0.01
-            cmd.linear.y = 0.01
-            self.publisher.publish(cmd)
+        # if (self.coordinates_x == 0) & (self.coordinates_y == 0):
+        theat = self.coordinates_x-160
+        if (np.abs(theat) < 10)
+            cmd.angular.z = 0.0
+        else
+            cmd.angular.z = 0.001*theat
+        self.publisher.publish(cmd)
 
 
 # def main():

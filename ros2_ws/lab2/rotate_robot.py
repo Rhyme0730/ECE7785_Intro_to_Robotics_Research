@@ -40,25 +40,25 @@ class rotate_node(Node):
     ### need to improve
     def send_cmd(self):
         cmd = Twist()
-        # if ((self.msg.x-160) != 0) & ((self.msg.y-120) != 0):
-        # if (self.coordinates_x == 0) & (self.coordinates_y == 0):
         theat = self.coordinates_x-160
-        if (np.abs(theat) < 10)
-            cmd.angular.z = 0.0
-        else
-            cmd.angular.z = 0.001*theat
+        if self.coordinates_x == 0.0:
+            cmd.angular.z = 0.0     # have not detected object
+        elif (np.abs(theat) < 5):
+            cmd.angular.z = 0.0     # threshold of tracking area
+        else:
+            cmd.angular.z = -0.01*theat   # feedback control
         self.publisher.publish(cmd)
 
 
-# def main():
-#     rclpy.init()
-#     rotate_node_1 = rotate_node()
+def main():
+    rclpy.init()
+    rotate_node_1 = rotate_node()
 
-#     while rclpy.ok():
-#         rclpy.spin_once(rotate_node_1) # Trigger callback processing.
+    while rclpy.ok():
+        rclpy.spin_once(rotate_node_1) # Trigger callback processing.
 
-#     rotate_node_1.destroy_node()  
-#     rclpy.shutdown()
+    rotate_node_1.destroy_node()  
+    rclpy.shutdown()
 
-# if __name__ == '__main__':
-# 	main()
+if __name__ == '__main__':
+	main()

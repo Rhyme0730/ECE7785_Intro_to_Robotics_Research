@@ -54,8 +54,11 @@ class chase_object(Node):
 
         if self.dist <= 3:
             error = self.dist - self.safe_dist
-            cmd.linear.x = self.limit(self.Kp_v*error,-0.1, 0.1)
-
+	    if np.abs(error) <= 0.05: # allow robot to stay in a approximate range 
+	    	cmd.linear.x = 0.0		
+	    else:
+		cmd.linear.x = self.limit(self.Kp_v*error,-0.1, 0.1)
+		    
         self.publisher.publish(cmd)
         
     # Limit function

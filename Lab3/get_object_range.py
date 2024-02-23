@@ -41,30 +41,39 @@ class get_object_range(Node):
     def get_distance(self,msg):
         self.unit_angle = msg.angle_increment # get the unit angle value of Lidar
             
-        # get the radians in the Lidar frame
+        ### get the radians in the Lidar frame
         if self.angle >= 0:
             radians = (self.angle/180)*np.pi
         else:
             radians = (self.angle/180+2)*np.pi
         index = min(int(radians/self.unit_angle),len(msg.ranges)-1)
 
-        # if not detected 
-        if self.angle == 9999: 
-            radians = np.nan
+        ### if not detected 
+        if self.angle == 9999.0: 
             self.distance = 0.4 # safe distance
         else:
-            if index <= len(msg.ranges)-2:
-                self.distance = (msg.ranges[index+1] + msg.ranges[index] + msg.ranges[index-1])/3
-            else:
-                self.distance = (msg.ranges[index] + msg.ranges[0] + msg.ranges[index-1])/3
+            num = 0
+            dist = 0
+            r = 2 
+            for i in range (r*2):
+                idx = index-r+i
+                if index < 0:
+                    idx = len(msg.ranges)+idx
+                if idx >= len(msg.ranges):
+                    idx -= len(msg.ranges)
+                if np.isnan(msg.ranges[idx]) or msg.ranges[idx]>=1.8:
+                    continue
+                num += 1
+                dist += msg.ranges[idx]
+            if num == 0:
+                return
+                
+            self.distance = dist/num
+
             # self.distance = msg.ranges[index]
-            if self.distance >= 3:
-                self.distance = 0.4
-        
-        self.get_logger().info(f'Received LiDAR scan with {self.distance}')
-        # self.get_logger().info(f'Received LiDAR scan with {msg.ranges[index-1]}')
-        # self.get_logger().info(f'Received LiDAR scan with {msg.ranges[index+1]}')
-        
+            self.get_logger().info(f'Received LiDAR scan with {self.distance}')
+            # self.get_logger().info(f'i-1:Received LiDAR scan with {msg.ranges[index-1]}')
+            
         # publish msg
         self.msg1 = Point()
         self.msg1.x = self.angle

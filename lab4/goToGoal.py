@@ -66,9 +66,10 @@ class goToGoal(Node):
         # Detect obstacle
         if self.d <= 0.6:
             self.avoidFlag = True
-            self.get_logger().info(f'Avoiding the obstacle at d = {self.d}, theta = {self.theta}')
+            # self.get_logger().info(f'Avoiding the obstacle at d = {self.d}, theta = {self.theta}')
         else:
             self.avoidFlag = False
+            # self.get_logger().info(f'Robot is tracking')
 
         # State Machine
         if self.avoidFlag:
@@ -79,15 +80,15 @@ class goToGoal(Node):
     ''' Avoid obstacle '''
     def avoid_Obs(self):
         error_a = self.globalAng - self.goal_ang[self.flag] + 1/2*np.pi
-        self.cmd.linear.x = 0.2*(1-np.exp(-self.d))  # The closer obstacle, the slower robot speed
-        self.cmd.angular.z = self.controller(error_a, 0.5, 1.5)  # Turn to another direction
+        self.cmd.linear.x = 0.05*(1-np.exp(-self.d))  # The closer obstacle, the slower robot speed
+        self.cmd.angular.z = self.controller(error_a, 1.2, 1.5)  # Turn to another direction
 
         self.vel_Publisher.publish(self.cmd)
 
     ''' Tracking waypoints'''
     def tracking(self):
         error_xy = np.array([self.globalPos.x - self.way_Point[self.flag][0], self.globalPos.y - self.way_Point[self.flag][1]])
-        # error = error_xy[np.mod(self.flag, 2)]
+ 
         error_a = self.globalAng - self.goal_ang[self.flag]
 
         # Mean squared error
@@ -97,19 +98,38 @@ class goToGoal(Node):
         flag_way = np.mod(self.flag, 2)  # 0: x axis, 1: y axis
 
         # moving along the y-axis
-        if self.flag == 2:
-            self.cmd.linear.x = -self.controller(error_xy[flag_way], 1, 0.2)
+        if self.flag == 1:
+            self.cmd.linear.x = self.controller(error_xy[flag_way], 1, 0.1)
+            if error_xy[1-flag_way] >= 0.3:
+                self.cmd.linear.x = 0.0
+                error_a -= np.arctan((self.globalPos.x-1.5)/(1.4-self.globalPos.y))
+                if error_a < self.ang_Threshold:
+                    self.cmd.linear.x = self.controller(error_xy[flag_way], 1, 0.1)
+                    self.cmd.angular.z = self.controller(error_a, 1.2, 1.5)
+
+        # moving along x-axis            
+        elif self.flag == 2:
+            # self.get_logger().info(f'Robot is tracking y-axis')
+            self.cmd.linear.x = -self.controller(error_xy[flag_way], 1, 0.1)
+
         # moving along the x-axis
         else:
-            self.cmd.linear.x = self.controller(error_xy[flag_way], 1, 0.2)
+            self.cmd.linear.x = self.controller(error_xy[flag_way], 1, 0.1)
+            self.cmd.angular.z = self.controller(error_a, 1.2, 1.5)
 
-        self.cmd.linear.y = self.controller(error_xy[1 - flag_way], 1, 0.2)
+        self.cmd.linear.y = self.controller(error_xy[1 - flag_way], 1, 0.1)
+        # self.get_logger().info(f'x command velocity = {self.cmd.linear.x}')
+        # self.get_logger().info(f'y command velocity = {self.cmd.linear.y}')
 
+        # If angle error is large, then stop and turn the angle
+
+
+        self.get_logger().info(f'error angle = {error_a}')
         # moving towards goal's angle
-        self.cmd.angular.z = self.controller(error_a, 0.5, 1.5)
+        # self.cmd.angular.z = self.controller(error_a, 1.2, 1.5)
 
         # If error of angle < 0.03, then stop turn the angle
-        if error_a <= self.ang_Threshold:  # Todo: need to consider the case of angle >= 360
+        if np.abs(error_a) <= self.ang_Threshold:  # Todo: need to consider the case of angle >= 360
             self.cmd.angular.z = 0.0
 
         # If reached waypoint then stop and turn left

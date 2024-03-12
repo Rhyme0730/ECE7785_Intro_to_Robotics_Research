@@ -38,6 +38,10 @@ class goToGoal(Node):
         self.d = 0.0
         self.theta = 0.0
 
+        # Obstacles
+        self.obs_xy_1 = np.array([0.0, 0.0])
+        self.obs_xy_2 = np.array([0.0, 0.0])
+
         # Subscriber 1: Get robots global position from on board odometry sensor
         self.odom_Subscriber = self.create_subscription(Odometry, '/odom', self.odom_callback, 1)
 
@@ -52,26 +56,24 @@ class goToGoal(Node):
     ''' Get odom data and runRobot '''
     def odom_callback(self, odom_msg):
         self.update_Odometry(odom_msg)
-        # self.get_logger().info(f'get robots global position x = {self.globalPos.x}, y = {self.globalPos.y} and global angle a = {self.globalAng}')
-        # self.run_Robot()
-        self.tracking()
-        # self.debug0()
+        self.run_Robot()
+        # self.tracking()
+        # self.debug1()
 
     ''' State Machine'''
     def run_Robot(self):
         # If finish tasks
-        if self.flag == 4:
+        if self.flag == 3:
             self.cmd.linear.x = 0.0
-            self.cmd.linear.y = 0.0
+            self.cmd.angular.z = 0.0
             return
 
         # Detect obstacle
-        if self.d <= 0.6:
+        if self.d <= 0.4 and self.d > 0.0:
             self.avoidFlag = True
             # self.get_logger().info(f'Avoiding the obstacle at d = {self.d}, theta = {self.theta}')
         else:
             self.avoidFlag = False
-            # self.get_logger().info(f'Robot is tracking')
 
         # State Machine
         if self.avoidFlag:
@@ -81,68 +83,38 @@ class goToGoal(Node):
 
     ''' Avoid obstacle '''
     def avoid_Obs(self):
-        error_a = self.globalAng - self.goal_ang[self.flag] + 1/2*np.pi
-        self.cmd.linear.x = 0.05*(1-np.exp(-self.d))  # The closer obstacle, the slower robot speed
-        self.cmd.angular.z = self.controller(error_a, 1.2, 1.5)  # Turn to another direction
+        kp_A = 1.5
+        kp_V = 1.0
+        ang_Max = 0.5
+        vel_Max = 0.2
+        pos_Tol = 0.05
+        ang_Tol = 0.05
 
-        self.vel_Publisher.publish(self.cmd)
-
-    ''' Tracking waypoints'''
-    def tracking1(self):
-        error_xy = np.array([self.globalPos.x - self.way_Point[self.flag][0], self.globalPos.y - self.way_Point[self.flag][1]])
-
-        error_a = self.globalAng - self.goal_ang[self.flag] + np.arctan((error_xy[flag_way]-self.globalPos.y)/(error_xy[flag_way]-self.globalPos.x))
-
-        # Mean squared error
-        MSE = np.sqrt(error_xy[0] ** 2 + error_xy[1] ** 2)
-
-        # follow the way points
-        flag_way = np.mod(self.flag, 2)  # 0: x axis, 1: y axis
-
-        # moving along the y-axis
+        x_goal = self.way_Point[self.flag][0]
+        y_goal = self.way_Point[self.flag][1]
+        x = self.globalPos.x
+        y = self.globalPos.y
+        ang = self.globalAng
+        theta = np.arctan((y_goal-y)/(x_goal-x))
+        error_d = 0.0
+        self.cmd.angular.z = 0.0
         if self.flag == 1:
-            self.cmd.linear.x = self.controller(error_xy[flag_way], 1, 0.1)
+            if theta < 0:
+                theta += np.pi
+            error_d = y_goal - y
+            self.obs_xy_1 = np.array([x_goal,y+self.d]) # record the obstacle position
+            self.cmd.angular.z = -0.2
+        
+        if self.flag == 2:
+            if ang < 0:
+                ang += 2*np.pi
+            theta += np.pi
+            error_d = -(x_goal - x)
+            self.obs_xy_2 = np.array([x-self.d,y_goal]) # record the obstacle position 
+            self.cmd.angular.z = 0.2
 
-        # moving along x-axis            
-        elif self.flag == 2:
-            # self.get_logger().info(f'Robot is tracking y-axis')
-            self.cmd.linear.x = -self.controller(error_xy[flag_way], 1, 0.1)
-
-        # moving along the x-axis
-        else:
-            self.cmd.linear.x = self.controller(error_xy[flag_way], 1, 0.1)
-
-        self.cmd.angular.z = self.controller(error_a, 1.2, 1.5)
-
-
-        self.get_logger().info(f'error angle = {error_a}')
-        # moving towards goal's angle
-        # self.cmd.angular.z = self.controller(error_a, 1.2, 1.5)
-
-        # If error of angle < 0.03, then stop turn the angle
-        if np.abs(error_a) <= self.ang_Threshold:  # Todo: need to consider the case of angle >= 360
-            self.cmd.angular.z = 0.0
-
-        # If reached waypoint then stop and turn left
-        if MSE <= self.pos_Threshold:
-            self.cmd.linear.x = 0.0
-            self.turn_left()
-
+        self.cmd.linear.x = 0.0
         self.vel_Publisher.publish(self.cmd)
-
-    ''' Turn robot to left after reaching way point'''
-    def turn_left(self):
-        # Turn to face next way point
-        error_a = self.globalAng - self.goal_ang[self.flag + 1]
-        self.cmd.angular.z = self.controller(error_a, 0.5, 1.5)
-        if np.abs(error_a) <= self.ang_Threshold:
-            self.get_logger().info("Got you! you are going to turn left")
-            self.cmd.angular.z = 0.0
-            # self.sleep_robot()
-            self.get_logger().info("Start to sleep for 10 seconds..............")
-
-            if self.flag <= 1:
-                self.flag += 1  # Go to next point
 
     def debug2(self):
         x_goal = self.way_Point[2][0]
@@ -169,13 +141,20 @@ class goToGoal(Node):
         y = self.globalPos.y
         ang = self.globalAng
         theta = np.arctan((y_goal-y)/(x_goal-x))
+        error_d = y_goal - y
+
         if theta < 0:
             theta += np.pi
-        
+
+        error_a = theta - ang
+        self.cmd.angular.z = self.controller(error_a,1.0,0.3)
+        self.cmd.linear.x = self.controller(error_d,1.0,0.1)
         ang *= 180/np.pi
         theta *= 180/np.pi
 
-        error_a = theta - ang
+        self.vel_Publisher.publish(self.cmd)
+
+        
 
         self.get_logger().info(f'ang = {ang}, theta = {theta}, error_a = {error_a}')
     
@@ -195,12 +174,13 @@ class goToGoal(Node):
         self.get_logger().info(f'ang = {ang}, theta = {theta}, error_a = {error_a}')
 
     def tracking(self):
-        kp_A = 1.0
+        kp_A = 2.0
         kp_V = 1.0
-        ang_Max = 0.3
-        vel_Max = 0.2
-        pos_Tol = 0.05
-        ang_Tol = 0.05
+        ang_Max = 0.4
+        vel_Max = 0.15
+        pos_Tol = 0.03
+        ang_Tol_Min = 0.04
+        ang_Tol_Max = 0.2
 
         x_goal = self.way_Point[self.flag][0]
         y_goal = self.way_Point[self.flag][1]
@@ -210,39 +190,51 @@ class goToGoal(Node):
 
         theta = np.arctan((y_goal-y)/(x_goal-x))
         error_d = 0.0
+        error_a = 0.0
 
         if self.flag == 0:
             error_d = x_goal - x
+            error_a = theta - ang
 
         if self.flag == 1:
             if theta < 0:
                 theta += np.pi
-            error_d = y_goal - y
+            error_d = y_goal - y + 0.05
+            error_a = theta - ang
+
+            if self.obs_xy_1[0] != 0.0 and y < self.obs_xy_1[1]:
+                error_a -= 0.4*np.pi
+                self.get_logger().info(f'obstacle1 coordinates = {(self.obs_xy_1[0],self.obs_xy_1[1])}')
         
         if self.flag == 2:
             if ang < 0:
                 ang += 2*np.pi
             theta += np.pi
-            error_d = -(x_goal - x)
-        
-        error_a = theta - ang
+            error_d = -(x_goal - x) + 0.08
+            error_a = theta - ang
 
+            if self.obs_xy_2[0] != 0.0 and x > self.obs_xy_2[0]:
+                # error_a -= 0.4*np.pi
+                error_a += 0.4*np.pi
+                self.get_logger().info(f'obstacle2 coordinates = {(self.obs_xy_2[0],self.obs_xy_2[1])}')
+            
         self.cmd.angular.z = self.controller(error_a, kp_A, ang_Max)
         self.cmd.linear.x = self.controller(error_d, kp_V, vel_Max)
 
-        # self.get_logger().info(f'flag = {self.flag}, theta = {theta}, ang = {ang}, error_a = {error_a}, error_d = {error_d}')
+        # self.get_logger().info(f'flag = {self.flag}, theta = {theta}, ang = {ang}, error_a = {error_a}, error_d = {error_d}, cmd.z = {self.cmd.angular.z}, cmd.x = {self.cmd.linear.x}')
+        if np.abs(error_a) > ang_Tol_Max:
+            self.cmd.linear.x = 0.0
 
-        if np.abs(error_a) < ang_Tol:
+        if np.abs(error_a) < ang_Tol_Min:
             self.cmd.angular.z = 0.0
 
         if np.abs(error_d) < pos_Tol:
             self.cmd.linear.x = 0.0
-            self.cmd.angular.z = 0.0     
             self.flag += 1
-            
-            self.get_logger().info('Wait for 10s, go to next state')
-
-        self.vel_Publisher.publish(self.cmd)
+            self.vel_Publisher.publish(self.cmd)
+            self.sleep_robot()
+        else:
+            self.vel_Publisher.publish(self.cmd)
 
     ''' Get LIDAR data '''
     def LIDAR_callback(self, lidar_msg):
@@ -266,7 +258,7 @@ class goToGoal(Node):
     ''' Sleep for 10 seconds '''
     def sleep_robot(self):
         self.get_logger().info('Pausing for 10 seconds.........')
-        time.sleep(10)
+        # time.sleep(10)
         self.get_logger().info('Times now.........')
 
     ''' Update the odom data in global frame'''
@@ -305,3 +297,7 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
+
+
+
+

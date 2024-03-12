@@ -258,7 +258,7 @@ class goToGoal(Node):
     ''' Sleep for 10 seconds '''
     def sleep_robot(self):
         self.get_logger().info('Pausing for 10 seconds.........')
-        # time.sleep(10)
+        time.sleep(10)
         self.get_logger().info('Times now.........')
 
     ''' Update the odom data in global frame'''

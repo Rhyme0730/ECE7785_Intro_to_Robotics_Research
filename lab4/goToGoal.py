@@ -71,7 +71,7 @@ class goToGoal(Node):
         # Detect obstacle
         if self.d <= 0.4 and self.d > 0.0:
             self.avoidFlag = True
-            # self.get_logger().info(f'Avoiding the obstacle at d = {self.d}, theta = {self.theta}')
+            self.get_logger().info(f'Detect obstacle!')
         else:
             self.avoidFlag = False
 
@@ -88,7 +88,7 @@ class goToGoal(Node):
         ang_Max = 0.5
         vel_Max = 0.2
         pos_Tol = 0.05
-        ang_Tol = 0.05
+        ang_Tol = 0.06
 
         x_goal = self.way_Point[self.flag][0]
         y_goal = self.way_Point[self.flag][1]
@@ -152,7 +152,7 @@ class goToGoal(Node):
         ang *= 180/np.pi
         theta *= 180/np.pi
 
-        self.vel_Publisher.publish(self.cmd)
+        # self.vel_Publisher.publish(self.cmd)
 
         
 
@@ -199,6 +199,8 @@ class goToGoal(Node):
         if self.flag == 1:
             if theta < 0:
                 theta += np.pi
+            if ang < -np.pi:
+                ang += 2*np.pi
             error_d = y_goal - y + 0.05
             error_a = theta - ang
 
@@ -221,7 +223,6 @@ class goToGoal(Node):
         self.cmd.angular.z = self.controller(error_a, kp_A, ang_Max)
         self.cmd.linear.x = self.controller(error_d, kp_V, vel_Max)
 
-        # self.get_logger().info(f'flag = {self.flag}, theta = {theta}, ang = {ang}, error_a = {error_a}, error_d = {error_d}, cmd.z = {self.cmd.angular.z}, cmd.x = {self.cmd.linear.x}')
         if np.abs(error_a) > ang_Tol_Max:
             self.cmd.linear.x = 0.0
 
@@ -235,6 +236,7 @@ class goToGoal(Node):
             self.sleep_robot()
         else:
             self.vel_Publisher.publish(self.cmd)
+        self.get_logger().info(f'flag = {self.flag}, theta = {theta}, ang = {ang}, error_a = {error_a}, error_d = {error_d}, cmd.z = {self.cmd.angular.z}, cmd.x = {self.cmd.linear.x}')
 
     ''' Get LIDAR data '''
     def LIDAR_callback(self, lidar_msg):
@@ -258,7 +260,7 @@ class goToGoal(Node):
     ''' Sleep for 10 seconds '''
     def sleep_robot(self):
         self.get_logger().info('Pausing for 10 seconds.........')
-        time.sleep(10)
+        # time.sleep(10)
         self.get_logger().info('Times now.........')
 
     ''' Update the odom data in global frame'''
@@ -297,7 +299,6 @@ def main(args=None):
 
 if __name__ == '__main__':
     main()
-
 
 
 

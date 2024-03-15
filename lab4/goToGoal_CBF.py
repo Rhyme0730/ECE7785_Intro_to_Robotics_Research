@@ -1,0 +1,283 @@
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy, QoSHistoryPolicy
+from geometry_msgs.msg import Vector3, Point, Quaternion, Twist
+from nav_msgs.msg import Odometry
+import numpy as np
+import time
+from CBF import cbf_control
+
+class goToGoal(Node):
+    def __init__(self):
+        super().__init__('goToGoal')
+        self.get_logger().info("Starting goToGoal Node.................................")
+
+        qos_profile = QoSProfile(depth=1)
+        qos_profile.reliability = QoSReliabilityPolicy.BEST_EFFORT
+        qos_profile.history = QoSHistoryPolicy.KEEP_LAST
+        qos_profile.durability = QoSDurabilityPolicy.VOLATILE
+
+        # Used for printing the odometry data
+        self.Init = True
+        self.Init_pos = Point()
+        self.Init_pos.x = 0.0
+        self.Init_pos.y = 0.0
+        self.Init_ang = 0.0
+        self.globalPos = Point()
+
+        # Used for switching status
+        self.flag = 0
+
+        # Some params
+        self.way_Point = np.array([[1.5, 0], [1.5, 1.4], [0, 1.4]])
+
+        # LIDAR msg
+        self.d = 0.0
+        self.theta = 0.0
+
+        # Obstacles
+        self.obs = []
+
+        # Subscriber 1: Get robots global position from on board odometry sensor
+        self.odom_Subscriber = self.create_subscription(Odometry, '/odom', self.odom_callback, 1)
+
+        # Subscriber 2: Detect whether there exist obstacles
+        self.LIDAR_Subscriber = self.create_subscription(Point, '/closest_point', self.LIDAR_callback, 1)
+
+        # Publisher 1: Publish Twist msg to cmd_vel
+        self.vel_Publisher = self.create_publisher(Twist, '/cmd_vel', 10)
+
+        # Command velocity
+        self.cmd = Twist()
+
+    ''' Get odom data and runRobot '''
+    def odom_callback(self, odom_msg):
+        self.update_Odometry(odom_msg)
+        self.run_Robot()
+        # self.tracking()
+        # self.debug1()
+
+    ''' Main code for running robot'''
+    def run_Robot(self):
+        # If finish tasks
+        if self.flag == 3:
+            self.cmd.linear.x = 0.0
+            self.cmd.angular.z = 0.0
+            self.get_logger().info('Finish tracking waypoints')
+            return
+        
+       # Detect obstacle
+        if self.d <= 0.6 and self.d > 0.0:
+            self.find_Obs()
+            for i in range(len(self.obs)):
+                self.get_logger().info(f'obstacle {i} coordinates(x,y) = {self.obs[i][0],self.obs[i][1]}')
+        
+        # Tracking waypoints
+        self.tracking()
+            
+    ''' Find obstacle '''
+    def find_Obs(self):
+        x_goal = self.way_Point[self.flag][0]
+        y_goal = self.way_Point[self.flag][1]
+        x = self.globalPos.x
+        y = self.globalPos.y
+        ang = self.globalAng
+        theta = np.arctan((y_goal-y)/(x_goal-x))
+
+        if self.flag == 1:
+            if theta < 0:
+                theta += np.pi
+            if ang < -np.pi:
+                ang += 2*np.pi
+
+        if self.flag == 2:
+            if ang < 0:
+                ang += 2*np.pi
+            theta += np.pi
+        
+        # Record the coordinates of obstacles
+        obs_Pos = np.array([x+np.cos(ang)*self.d, y+np.sin(ang)*self.d])
+        self.obs = np.append(self.obs,obs_Pos)
+        self.obs = np.reshape(self.obs,(-1,2))
+
+    ''' Tracking Waypoints'''
+    def tracking(self):
+        kp_A = 2.0
+        kp_V = 1.0
+        ang_Max = 0.4
+        vel_Max = 0.15
+        pos_Tol = 0.03
+        ang_Tol_Min = 0.04
+        ang_Tol_Max = 0.2
+
+        x_goal = self.way_Point[self.flag][0]
+        y_goal = self.way_Point[self.flag][1]
+        x = self.globalPos.x
+        y = self.globalPos.y
+        ang = self.globalAng
+
+        theta = np.arctan((y_goal-y)/(x_goal-x))
+        error_d = 0.0
+        error_a = 0.0
+
+        if self.flag == 0:
+            error_d = x_goal - x
+            error_a = theta - ang
+
+        if self.flag == 1:
+            if theta < 0:
+                theta += np.pi
+            if ang < -np.pi:
+                ang += 2*np.pi
+            error_d = y_goal - y + 0.05
+            error_a = theta - ang
+        
+        if self.flag == 2:
+            if ang < 0:
+                ang += 2*np.pi
+            theta += np.pi
+            error_d = -(x_goal - x) + 0.08
+            error_a = theta - ang
+
+        self.cmd.linear.x = self.controller(error_d, kp_V, vel_Max)
+        self.cmd.angular.z = self.controller(error_a, kp_A, ang_Max)
+        
+        # If exist obstacle, then using control barrier function
+        if len(self.obs) != 0:
+            for i in range(len(self.obs)):
+                state = np.array([x, y, ang])
+                u_nominal = np.array([self.cmd.linear.x, self.cmd.angular.z])
+                u_cbf = cbf_control(state, self.obs[i][0], self.obs[i][1], u_nominal, D=0.2, alpha=1.0) 
+
+                # If u_cbf have effects on control, then substitute u to u_cbf
+                if u_cbf[0] != u_nominal[0] or u_cbf[1] != u_nominal[1]:
+                    self.cmd.linear.x = self.limit(u_cbf[0], vel_Max)
+                    self.cmd.angular.z = self.limit(u_cbf[1], ang_Max)
+
+        # If achieve desired angle, then stop turn angle
+        if np.abs(error_a) < ang_Tol_Min:
+            self.cmd.angular.z = 0.0
+
+        # If arrive destination, them stop and go to next state
+        if np.abs(error_d) < pos_Tol:
+            self.cmd.linear.x = 0.0
+            self.flag += 1
+            self.vel_Publisher.publish(self.cmd)
+            self.sleep_robot()
+        else:
+            self.vel_Publisher.publish(self.cmd)
+        # self.get_logger().info(f'flag = {self.flag}, theta = {theta}, ang = {ang}, error_a = {error_a}, error_d = {error_d}, cmd.z = {self.cmd.angular.z}, cmd.x = {self.cmd.linear.x}')
+
+    ''' Get LIDAR data '''
+    def LIDAR_callback(self, lidar_msg):
+        self.theta = lidar_msg.x * 360.0
+        self.d = lidar_msg.y
+
+    ''' Currently only P control'''
+    def controller(self, error, Kp, max):  # Todo: upgrade to PID controller
+        u = self.limit(Kp * error, max)
+        return u
+
+    ''' Limit function '''
+    def limit(self, val, max):
+        if val >= max:
+            val = max
+        elif val <= -max:
+            val = -max
+        return val
+
+    ''' Update the odom data in global frame'''
+    def update_Odometry(self, Odom):
+        position = Odom.pose.pose.position
+
+        # Orientation uses the quaternion aprametrization.
+        # To get the angular position along the z-axis, the following equation is required.
+        q = Odom.pose.pose.orientation
+        orientation = np.arctan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
+
+        if self.Init:
+            # The initial data is stored to by subtracted to all the other values as we want to start at position (0,0) and orientation 0
+            self.Init = False
+            self.Init_ang = orientation
+            self.globalAng = self.Init_ang
+            Mrot = np.matrix(
+                [[np.cos(self.Init_ang), np.sin(self.Init_ang)], [-np.sin(self.Init_ang), np.cos(self.Init_ang)]])
+            self.Init_pos.x = Mrot.item((0, 0)) * position.x + Mrot.item((0, 1)) * position.y
+            self.Init_pos.y = Mrot.item((1, 0)) * position.x + Mrot.item((1, 1)) * position.y
+            self.Init_pos.z = position.z
+        Mrot = np.matrix(
+            [[np.cos(self.Init_ang), np.sin(self.Init_ang)], [-np.sin(self.Init_ang), np.cos(self.Init_ang)]])
+
+        # We subtract the initial values
+        self.globalPos.x = Mrot.item((0, 0)) * position.x + Mrot.item((0, 1)) * position.y - self.Init_pos.x
+        self.globalPos.y = Mrot.item((1, 0)) * position.x + Mrot.item((1, 1)) * position.y - self.Init_pos.y
+        self.globalAng = orientation - self.Init_ang
+
+    def debug2(self):
+        x_goal = self.way_Point[2][0]
+        y_goal = self.way_Point[2][1]
+        x = self.globalPos.x
+        y = self.globalPos.y
+        ang = self.globalAng
+        if ang < 0:
+            ang += 2*np.pi
+        theta = np.arctan((y_goal-y)/(x_goal-x))
+        theta += np.pi
+        
+        ang *= 180/np.pi
+        theta *= 180/np.pi
+
+        error_a = theta - ang
+
+        self.get_logger().info(f'ang = {ang}, theta = {theta}, error_a = {error_a}')
+
+    def debug1(self):
+        x_goal = self.way_Point[1][0]
+        y_goal = self.way_Point[1][1]
+        x = self.globalPos.x
+        y = self.globalPos.y
+        ang = self.globalAng
+        theta = np.arctan((y_goal-y)/(x_goal-x))
+        error_d = y_goal - y
+
+        if theta < 0:
+            theta += np.pi
+
+        error_a = theta - ang
+        self.cmd.angular.z = self.controller(error_a,1.0,0.3)
+        self.cmd.linear.x = self.controller(error_d,1.0,0.1)
+        ang *= 180/np.pi
+        theta *= 180/np.pi
+
+        # self.vel_Publisher.publish(self.cmd)
+
+        
+
+        self.get_logger().info(f'ang = {ang}, theta = {theta}, error_a = {error_a}')
+    
+    def debug0(self):
+        x_goal = self.way_Point[0][0]
+        y_goal = self.way_Point[0][1]
+        x = self.globalPos.x
+        y = self.globalPos.y
+        ang = self.globalAng
+        theta = np.arctan((y_goal-y)/(x_goal-x))
+        
+        ang *= 180/np.pi
+        theta *= 180/np.pi
+
+        error_a = theta - ang
+
+        self.get_logger().info(f'ang = {ang}, theta = {theta}, error_a = {error_a}')
+
+def main(args=None):
+    rclpy.init(args=args)
+    gTG = goToGoal()
+    rclpy.spin(gTG)
+    gTG.destroy_node()
+    rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+
+
